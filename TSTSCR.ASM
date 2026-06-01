@@ -6,13 +6,14 @@
 * =============================================================================
 
 *       ADDRESS
-ACIACS  EQU     $8004           * Exor serial port 0
+ACIACS  EQU     8004H           ;* Exor serial port 0
 ACIADA  EQU     ACIACS+1
 
 * VT100 Control Sequences
 ESC     EQU     $1B             * Escape character
 LF      EQU     $0A             * Line Feed
 CR      EQU     $0D             * Carriage Return
+SP      EQU     $20             * Space character
 SPACE   EQU     $20             * Space character
 
 * Flex DOS System Call Addresses
@@ -25,8 +26,25 @@ SETEXT  EQU     $AD33           * Set default file extension
 OUTDEC  EQU     $AD39           * Output Decimanl Number
 
 * Screen defaults (will be read from Flex environment)
-DEFROWS EQU    24               * Default screen rows
-DEFCOLS EQU    80               * Default screen columns
+DEFROWS EQU    30               * Default screen rows
+DEFCOLS EQU    100              * Default screen columns
+
+* =============================================================================
+* TTYSET memory map
+* =============================================================================
+TTYBS   EQU     $AC00           * TTY BS char
+TTYDL   EQU     $AC01           * TTY Delete char
+TTYEL   EQU     $AC02           * TTY End of line char
+TTYDP   EQU     $AC03           * TTY Depth count      (rows)
+TTYROW  EQU     $AC03           * TTY Depth count      (rows)
+TTYWD	EQU     $AC04           * TTY Width count      (cols)
+TTYCOL	EQU     $AC04           * TTY Width count      (cols)
+TTYNL   EQU     $AC05           * TTY Null count
+TTYTB   EQU     $AC06           * TTY Tab char
+TTYBE   EQU     $AC07           * TTY BS Echo char
+TTYEJ   EQU     $AC08           * TTY Eject Count
+TTYPS   EQU     $AC09           * TTY Pause Control
+TTYES   EQU     $AC0A           * TTY Escape char
 
 * =============================================================================
 * Variable Storage Area
@@ -67,17 +85,64 @@ MAIN    LDS     #STACK
 
 * Test sequence
 TESTSTART
-        JSR     TESTCLEAR      * Test screen clearing
+        JSR     TESTCLEAR       * Test screen clearing
+*
+        LDAA    #5              * Row
+        STAA    CSRROW          *
+        LDAA    #5              * Column
+        STAA    CSRCOL          *
+        JSR     SCRPOS          * Move the cursor
+        JSR     DELAY
+*
+        LDX     #MSGCLEAR       * Print Clear msg (past the CR/LF)
+        STX     TMPX
+        JSR     PRINTSTRING
+        JSR     WAITKEY         * Wait for keypress
 
-        JSR     TESTCORNERS    * Test corner positioning
-        JSR     TESTMIDDLE     * Test middle positioning
+* Messing with the status string
+        JSR     NSTAT           * Turn on the status
+        LDAB    #80
+        LDAA    #SP
+LOOP    JSR     PUTCHAR
+        DECB
+        BNE     LOOP            * Count down
+*
+        LDAA    #5              * Row
+        STAA    CSRROW          *
+        LDAA    #5              * Column
+        STAA    CSRCOL          *
+        JSR     SCRPOS          * Move the cursor
 
-*       JSR     WAITKEY        * Wait for keypress
+        JSR     DELAY
+
+        LDX     #LINMSG
+        JSR     SCRPOS          * Didn't change the CSR ROW & COL
+        JSR     PRINTSTRING
+        JSR     FSTAT           *
+*
+        JSR     WAITKEY         * Wait for keypress
+*
+        JSR     TESTCORNERS     * Test corner positioning
+*
+        LDAA    #5              * Row
+        STAA    CSRROW          *
+        LDAA    #5              * Column
+        STAA    CSRCOL          *
+        JSR     SCRPOS          * Move the cursor
+*
+        LDX     #MIDMSG         * Print Center
+        JSR     PRINTSTRING
+        JSR     WAITKEY         * Wait for keypress
+
+        JSR     TESTMIDDLE      * Test middle positioning
 
         JSR     BOTLEFT
+
+        JSR     STATPR          *
 XIT     JSR     PCRLF
 
-        JMP     WARMST         * Exit to Flex
+        JMP     WARMST          * Exit to Flex
+* ==============================================================================
 
 TESTCLEAR
         JSR     CLS
@@ -92,6 +157,7 @@ TESTCLEAR
 TESTCORNERS
 *       * Test all four corners
         JSR     HOME
+        JSR     CLR2EOL         * Clear the line
         LDX     #MSGHOME
         JSR     PRINTSTRING
         JSR     DELAY
@@ -122,6 +188,77 @@ TESTMIDDLE
         LDX     #MIDMSG
         JSR     PRINTSTRING
         RTS
+* ==============================================================================
+* Turn on the status bar
+NSTAT
+        LDAA    TTYROW          * Row
+        STAA    CSRROW          *
+        LDAA    #0              * Column
+        STAA    CSRCOL          *
+        JSR     SCRPOS          * Move the cursor
+
+        LDX     #ENAINV
+        JMP     PRINTSTRING     * PRINTSTRING has a RTS
+
+* Turn off the status bar
+FSTAT
+        LDX     #DISINV
+        JMP     PRINTSTRING
+
+* Turn on the status line
+ONSTAT
+
+*       * Enable inverse video (ESC [ 7 m)
+        LDAA    #ESC
+        JSR     PUTCHAR
+        LDAA    #'[
+        JSR     PUTCHAR
+        LDAA    #'7
+        JSR     PUTCHAR
+        LDAA    #'m
+        JSR     PUTCHAR
+        RTS
+* Turn off the status line
+OFFSTAT
+        JSR     CLR2EOL         * Clear to the end of the line
+
+*       * Disable inverse video (ESC [ 0 m)
+        LDAA    #ESC
+        JSR     PUTCHAR
+        LDAA    #'[
+        JSR     PUTCHAR
+        LDAA    #'0
+        JSR     PUTCHAR
+        LDAA    #'m
+        JSR     PUTCHAR
+        LDAA    MTMP
+        STAA    CSRROW
+        LDAA    MTMP+1
+        STAA    CSRCOL
+        RTS
+* ==============================================================================
+
+* Print null-terminated string at column pointed to by X, on the Status line
+STATPR
+        LDAA    TTYROW          * Status Row (last Row)
+        STAA    CSRROW
+        LDAA    #0              * Column 0
+        STAA    CSRCOL
+        JSR     SCRPOS          * Set the cursor position
+
+        JSR     ONSTAT          * Turn on inverse
+*       *                       * X already has the string in it
+        LDX     #LINMSG
+        JSR     PRINTSTRING
+        JSR     OFFSTAT         * Turn off inverse
+PRSTAT
+        LDAA    ,X              * Get character and increment pointer
+        BEQ     PRINTDONE       * If null, we're done
+        INX
+        JSR     PUTCHAR         * Output character
+        BRA     PRSTAT          * Continue
+
+* ==============================================================================
 
 * Print null-terminated string pointed to by X
 PRINTSTRING
@@ -152,8 +289,8 @@ WAITKEY
         RTS
 
 * Test messages
-MSGCLEAR      FCB 13,10
-              FCC "Screen cleared"
+              FCB 13,10
+MSGCLEAR      FCC "Screen cleared"
               FCB 0
 MSGHOME       FCC "HOME"
               FCB 0
@@ -163,10 +300,41 @@ LFMSGBOT      FCC "BOT-L"
               FCB 0
 RTMSGBOT      FCC "BOT-R"
               FCB 0
-MIDMSG        FCC "CENTER"
+MIDMSG        FCC "Center"
               FCB 0
-CONTMSG       FCB 13,10
-              FCC "Press any to continue: "
+              FCB 13,10
+CONTMSG       FCC "Press any to continue: "
+              FCB 0
+
+LINMSG        FCC "---Status Line---                                                             "
+              FCB 0
+
+CLSMSG        FCB ESC
+              FCB '[
+              FCB '2
+              FCB 'J
+              FCB 0
+
+HOMEMSG       FCB ESC
+              FCB '[
+              FCB 'H
+              FCB 0
+
+CLREOLM       FCB ESC
+              FCB '[
+              FCB 'K
+              FCB 0
+
+ENAINV        FCB ESC
+              FCB '[
+              FCB '7
+              FCB 'm * 0x1B, 0x5B, 0x37, 0x6d
+              FCB 0
+
+DISINV        FCB ESC
+              FCB '[
+              FCB '0
+              FCB 'm
               FCB 0
 
 * =============================================================================
@@ -176,25 +344,46 @@ CONTMSG       FCB 13,10
 * Clear entire screen and position cursor at home
 CLS
 CLRSCR
+* Hmm, didn't work
+        LDX     #CLSMSG
+        JSR     PRINTSTRING
+        LDX     #HOMEMSG
+        JMP     PRINTSTRING
+*        RTS
+
 *       * Send ESC[2J (clear entire screen)
-        LDAA    #ESC
-        JSR     PUTCHAR
-        LDAA    #'[ 
-        JSR     PUTCHAR
-        LDAA    #'2 
-        JSR     PUTCHAR
-        LDAA    #'J 
-        JSR     PUTCHAR
+*        LDAA    #ESC
+*        JSR     PUTCHAR
+*        LDAA    #'[ 
+*        JSR     PUTCHAR
+*        LDAA    #'2 
+*        JSR     PUTCHAR
+*        LDAA    #'J 
+*        JSR     PUTCHAR
         
 *       * Send ESC[H (cursor home)
-        LDAA    #ESC
-        JSR     PUTCHAR
-        LDAA    #'[ 
-        JSR     PUTCHAR
-        LDAA    #'H 
-        JSR     PUTCHAR
+*        LDAA    #ESC
+*        JSR     PUTCHAR
+*        LDAA    #'[ 
+*        JSR     PUTCHAR
+*        LDAA    #'H 
+*        JSR     PUTCHAR
         
-        RTS
+*        RTS
+
+*       * Clear to end of line (ESC [ K)
+CLR2EOL
+        LDX     #CLREOLM
+        JMP     PRINTSTRING
+*        RTS
+
+*CLR     LDAA    #ESC
+*        JSR     PUTCHAR
+*        LDAA    #'[
+*        JSR     PUTCHAR
+*        LDAA    #'K
+*        JMP     PUTCHAR         *
+*       RTS                     * The Jmp to PUTCHAR make this unnecessay
 
 * Position cursor at home (1,1)
 * 1x1
@@ -202,8 +391,8 @@ HOME
         LDAA    #1
         STAA    CSRROW
         STAA    CSRCOL
-        JSR     SCRPOS
-        RTS
+        JMP     SCRPOS
+*       RTS
 
 * Position cursor at middle of screen
 * 40x12
@@ -289,9 +478,9 @@ GETSCSZ
         
 *       * TODO: Add actual Flex terminal size detection
 *       * For now, assume standard VT100 terminal
-        LDAA     #DEFROWS
+        LDAA     TTYROW
         STAA     SCRROWS
-        LDAA     #DEFCOLS  
+        LDAA     TTYCOL  
         STAA     SCRCOLS
         
 *       * Could add environment variable checks here:
@@ -314,36 +503,36 @@ PUTDEC
         JMP     OUTDEC
 
 * Output decimal number in A register (1-99 range for cursor positioning)
-xPUTDEC
-        NOP
-*
-        CMPA    #10
-*       BLO     PUTSING         * Less than 10, single digit (BCS = 0x25 Carry = 1 , BCS = BLO))
-        BCS     PUTSING         * Less than 10, single digit (BCS = 0x25 Carry = 1)
-        
-*       * Two digits - use B as tens character counter
-*       LDAB    #'0             * Start with ASCII '0
-        CLRB                    * Start with ASCII '0
-PUTTENS
-        CMPA    #10
-        BLO     PTENSDN         * Less than 10, we're done
-        SUBA    #10             * Subtract 10
-        INCB                    * Increment tens digit
-        BRA     PUTTENS         * Continue
-        
-PTENSDN
-        PSHA                    * Save ones digit
-        TBA                     * Move tens digit to A
-        CLRB
-        ADDA    #'0             * Convert to ASCII
-        JSR     PUTCHAR         * Output tens digit
-        PULA                    * Restore ones digit
-        
-PUTSING
-        CLRB
-        ADDA    #'0             * Convert to ASCII
-        JSR     PUTCHAR         * Output ones digit
-        RTS
+*xPUTDEC
+*        NOP
+**
+*        CMPA    #10
+**       BLO     PUTSING         * Less than 10, single digit (BCS = 0x25 Carry = 1 , BCS = BLO))
+*        BCS     PUTSING         * Less than 10, single digit (BCS = 0x25 Carry = 1)
+*        
+**       * Two digits - use B as tens character counter
+**       LDAB    #'0             * Start with ASCII '0
+*        CLRB                    * Start with ASCII '0
+*PUTTENS
+*        CMPA    #10
+*        BLO     PTENSDN         * Less than 10, we're done
+*        SUBA    #10             * Subtract 10
+*        INCB                    * Increment tens digit
+*        BRA     PUTTENS         * Continue
+*        
+*PTENSDN
+*        PSHA                    * Save ones digit
+*        TBA                     * Move tens digit to A
+*        CLRB
+*        ADDA    #'0             * Convert to ASCII
+*        JSR     PUTCHAR         * Output tens digit
+*        PULA                    * Restore ones digit
+*        
+*PUTSING
+*        CLRB
+*        ADDA    #'0             * Convert to ASCII
+*        JSR     PUTCHAR         * Output ones digit
+*        RTS
 
 *       OUTPUT ONE CHAR 
 PUTCHAR
