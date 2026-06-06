@@ -13,7 +13,7 @@ ACIADA  EQU     ACIACS+1
 ESC     EQU     $1B             * Escape character
 LF      EQU     $0A             * Line Feed
 CR      EQU     $0D             * Carriage Return
-SP      EQU     $20             * Space character
+SPC     EQU     $20             * Space character
 SPACE   EQU     $20             * Space character
 
 * Flex DOS System Call Addresses
@@ -85,6 +85,12 @@ MAIN    LDS     #STACK
 
 * Test sequence
 TESTSTART
+        JSR     CLS             * Clears the screen
+        JSR     STATPR          * Prints the status line (but puts ---status line ---
+        JSR     HOME            * Returns to the home position
+        JSR     WAITKEY         * Wiats for any key but doesn't print anything
+
+* Original TSTSTART
         JSR     TESTCLEAR       * Test screen clearing
 *
         LDAA    #5              * Row
@@ -97,15 +103,15 @@ TESTSTART
         LDX     #MSGCLEAR       * Print Clear msg (past the CR/LF)
         STX     TMPX
         JSR     PRINTSTRING
-        JSR     WAITKEY         * Wait for keypress
+*       JSR     WAITKEY         * Wait for keypress
+        JSR     KEYWAIT         *
+
+        JSR     DELAY
 
 * Messing with the status string
         JSR     NSTAT           * Turn on the status
         LDAB    #80
-        LDAA    #SP
-LOOP    JSR     PUTCHAR
-        DECB
-        BNE     LOOP            * Count down
+        JSR     BLANK
 *
         LDAA    #5              * Row
         STAA    CSRROW          *
@@ -120,7 +126,8 @@ LOOP    JSR     PUTCHAR
         JSR     PRINTSTRING
         JSR     FSTAT           *
 *
-        JSR     WAITKEY         * Wait for keypress
+*       JSR     WAITKEY         * Wait for keypress
+        JSR     KEYWAIT         * Wait for keypress
 *
         JSR     TESTCORNERS     * Test corner positioning
 *
@@ -140,6 +147,8 @@ LOOP    JSR     PUTCHAR
 
         JSR     STATPR          *
 XIT     JSR     PCRLF
+
+        JSR     KEYWAIT
 
         JMP     WARMST          * Exit to Flex
 * ==============================================================================
@@ -189,61 +198,78 @@ TESTMIDDLE
         JSR     PRINTSTRING
         RTS
 * ==============================================================================
-* Turn on the status bar
-NSTAT
-        LDAA    TTYROW          * Row
+* Position the work on the status line
+POSSTAT LDAA    TTYROW          * Row
         STAA    CSRROW          *
         LDAA    #0              * Column
         STAA    CSRCOL          *
         JSR     SCRPOS          * Move the cursor
+        RTS
 
+* ==============================================================================
+* Turn on the status bar
+NSTAT
+ONSTAT
+        JSR     POSSTAT         * Position the work on the status line
         LDX     #ENAINV
         JMP     PRINTSTRING     * PRINTSTRING has a RTS
 
 * Turn off the status bar
 FSTAT
+OFFSTAT
         LDX     #DISINV
         JMP     PRINTSTRING
 
 * Turn on the status line
-ONSTAT
-
-*       * Enable inverse video (ESC [ 7 m)
-        LDAA    #ESC
-        JSR     PUTCHAR
-        LDAA    #'[
-        JSR     PUTCHAR
-        LDAA    #'7
-        JSR     PUTCHAR
-        LDAA    #'m
-        JSR     PUTCHAR
-        RTS
-* Turn off the status line
-OFFSTAT
-        JSR     CLR2EOL         * Clear to the end of the line
-
-*       * Disable inverse video (ESC [ 0 m)
-        LDAA    #ESC
-        JSR     PUTCHAR
-        LDAA    #'[
-        JSR     PUTCHAR
-        LDAA    #'0
-        JSR     PUTCHAR
-        LDAA    #'m
-        JSR     PUTCHAR
-        LDAA    MTMP
-        STAA    CSRROW
-        LDAA    MTMP+1
-        STAA    CSRCOL
-        RTS
+*ONSTAT
+*
+**       * Enable inverse video (ESC [ 7 m)
+*        LDAA    #ESC
+*        JSR     PUTCHAR
+*        LDAA    #'[
+*        JSR     PUTCHAR
+*        LDAA    #'7
+*        JSR     PUTCHAR
+*        LDAA    #'m
+*        JSR     PUTCHAR
+*        RTS
+** Turn off the status line
+*OFFSTAT
+*        JSR     CLR2EOL         * Clear to the end of the line
+*
+**       * Disable inverse video (ESC [ 0 m)
+*        LDAA    #ESC
+*        JSR     PUTCHAR
+*        LDAA    #'[
+*        JSR     PUTCHAR
+*        LDAA    #'0
+*        JSR     PUTCHAR
+*        LDAA    #'m
+*        JSR     PUTCHAR
+*        LDAA    MTMP
+*        STAA    CSRROW
+*        LDAA    MTMP+1
+*        STAA    CSRCOL
+*        RTS
 * ==============================================================================
 
-* Print null-terminated string at column pointed to by X, on the Status line
-STATPR
-        LDAA    TTYROW          * Status Row (last Row)
+STATPOS LDAA    TTYROW          * Status Row (last Row)
         STAA    CSRROW
         LDAA    #0              * Column 0
         STAA    CSRCOL
+        RTS
+
+* Print null-terminated string at column pointed to by X, on the Status line
+XSTATPR
+        JSR     STATPOS         * Set the cursor position
+
+        JSR     ONSTAT          * Turn on inverse
+*       *                       * X already has the string in it
+        JSR     PRINTSTRING
+        JMP     OFFSTAT         * Turn off inverse
+
+* Print null-terminated string at column pointed to by X, on the Status line
+STATPR  JSR     STATPOS         *
         JSR     SCRPOS          * Set the cursor position
 
         JSR     ONSTAT          * Turn on inverse
@@ -289,7 +315,6 @@ WAITKEY
         RTS
 
 * Test messages
-              FCB 13,10
 MSGCLEAR      FCC "Screen cleared"
               FCB 0
 MSGHOME       FCC "HOME"
@@ -302,7 +327,7 @@ RTMSGBOT      FCC "BOT-R"
               FCB 0
 MIDMSG        FCC "Center"
               FCB 0
-              FCB 13,10
+
 CONTMSG       FCC "Press any to continue: "
               FCB 0
 
@@ -325,10 +350,10 @@ CLREOLM       FCB ESC
               FCB 'K
               FCB 0
 
-ENAINV        FCB ESC
+ENAINV        FCB ESC           * 0x1B, 0x5B, 0x37, 0x6d
               FCB '[
               FCB '7
-              FCB 'm * 0x1B, 0x5B, 0x37, 0x6d
+              FCB 'm
               FCB 0
 
 DISINV        FCB ESC
@@ -345,45 +370,21 @@ DISINV        FCB ESC
 CLS
 CLRSCR
 * Hmm, didn't work
-        LDX     #CLSMSG
+        LDX     #CLSMSG         * Clear the screen
         JSR     PRINTSTRING
-        LDX     #HOMEMSG
+*
+*        LDX     #LINMSG         * Print a blank status line
+*        JSR     XSTATPR
+        LDAB    #80             * 80 characters for a blank line
+        JSR     BLANK           *
+*
+        LDX     #HOMEMSG        * Got to the Home Position
         JMP     PRINTSTRING
-*        RTS
-
-*       * Send ESC[2J (clear entire screen)
-*        LDAA    #ESC
-*        JSR     PUTCHAR
-*        LDAA    #'[ 
-*        JSR     PUTCHAR
-*        LDAA    #'2 
-*        JSR     PUTCHAR
-*        LDAA    #'J 
-*        JSR     PUTCHAR
-        
-*       * Send ESC[H (cursor home)
-*        LDAA    #ESC
-*        JSR     PUTCHAR
-*        LDAA    #'[ 
-*        JSR     PUTCHAR
-*        LDAA    #'H 
-*        JSR     PUTCHAR
-        
-*        RTS
 
 *       * Clear to end of line (ESC [ K)
 CLR2EOL
         LDX     #CLREOLM
         JMP     PRINTSTRING
-*        RTS
-
-*CLR     LDAA    #ESC
-*        JSR     PUTCHAR
-*        LDAA    #'[
-*        JSR     PUTCHAR
-*        LDAA    #'K
-*        JMP     PUTCHAR         *
-*       RTS                     * The Jmp to PUTCHAR make this unnecessay
 
 * Position cursor at home (1,1)
 * 1x1
@@ -546,6 +547,27 @@ OUTEE1  LDAA    ACIACS          * Check the status
         PULA                    * Retore the character
         STAA    ACIADA          * Send it to the Serial Port
         RTS
-
+* ==============================================================================
+*
+KEYWAIT JSR     ONSTAT          * Turn on status
+        JSR     BLNK2           * Blank part of the status line
+*
+*       JSR     NSTAT           * Reposition
+        JSR     POSSTAT         * Back to the start of the Status line
+        LDX     #CONTMSG
+        STX     TMPX
+        JSR     PRINTSTRING
+*
+        JSR     WAITKEY         * Wait for any key
+        JSR     BLNK2           *
+        JMP     OFFSTAT
+* ==============================================================================
+*
+BLNK2   LDAB    #$20            * Clear part of the line
+BLANK   LDAA    #SPC
+LOOP    JSR     PUTCHAR
+        DECB
+        BNE     LOOP            * Count down
+        RTS
 ****************************************
         END     MAIN
